@@ -12,17 +12,16 @@ BallTracker::BallTracker(int leftPWM, int leftD1, int leftD2,
   rightMotorDir1 = rightD1;
   rightMotorDir2 = rightD2;
   
-  // Default values (unchanged)
   leftMotorCompensation = 1.0;
-  rightMotorCompensation = 1.0;
+  rightMotorCompensation = 0.82;
   
   // Initialize ball position (unchanged)
-  ballX = -1;  // -1 means no ball detected
+  ballX = -1;  // -1 means no ball detected 
   ballY = -1;
   
   // Default target position (center of frame) (unchanged)
-  targetX = 320;  // Assuming 640x480 resolution
-  targetY = 240;
+  targetX = 160;  // Assuming 640x480 resolution
+  targetY = 120;
   
   // PID for X axis (rotation) - Modified for PID_v1
   KpX = 0.5;
@@ -206,126 +205,6 @@ void BallTracker::updateBallPosition(int x, int y) {
   }
 }
 
-void BallTracker::autoTuneLoop() {
-  if (!ballDetected) return;
-  
-  // Calculate input values (errors)
-  xInput = targetX - ballX;
-  yInput = targetY - ballY;
-  
-  // Run AutoTune iterations
-  byte xVal = 0;
-  byte yVal = 0;
-  
-  if (xTuningActive) {
-    xVal = xTuner->Runtime();
-  }
-  
-  if (yTuningActive) {
-    yVal = yTuner->Runtime();
-  }
-  
-  // Apply motor controls based on tuning outputs
-  int leftSpeed = 0;
-  int rightSpeed = 0;
-  
-  // Handle X-axis control (rotation)
-  if (abs(xInput) > 20) {  // Dead zone of 20 pixels
-    int turnSpeed = constrain(abs(xOutput), 120, baseSpeed);
-    
-    if (xOutput > 0) {
-      // Need to turn left
-      leftSpeed -= turnSpeed;
-      rightSpeed += turnSpeed;
-    } else {
-      // Need to turn right
-      leftSpeed += turnSpeed;
-      rightSpeed -= turnSpeed;
-    }
-  }
-  
-  // Handle Y-axis control (forward/backward)
-  if (abs(yInput) > 20) {  // Dead zone of 20 pixels
-    int moveSpeed = constrain(abs(yOutput), 120, baseSpeed);
-    
-    if (yOutput > 0) {
-      // Need to move forward
-      leftSpeed += moveSpeed;
-      rightSpeed += moveSpeed;
-    } else {
-      // Need to move backward
-      leftSpeed -= moveSpeed;
-      rightSpeed -= moveSpeed;
-    }
-  }
-  
-  // Apply final motor speeds
-  if (leftSpeed > 0 && rightSpeed > 0) {
-    // Moving forward with possible rotation
-    int adjLeftSpeed = leftSpeed * leftMotorCompensation;
-    int adjRightSpeed = rightSpeed * rightMotorCompensation;
-    
-    digitalWrite(leftMotorDir1, HIGH);
-    digitalWrite(leftMotorDir2, LOW);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, HIGH);
-    digitalWrite(rightMotorDir2, LOW);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else if (leftSpeed < 0 && rightSpeed < 0) {
-    // Moving backward with possible rotation
-    int adjLeftSpeed = abs(leftSpeed) * leftMotorCompensation;
-    int adjRightSpeed = abs(rightSpeed) * rightMotorCompensation;
-    
-    digitalWrite(leftMotorDir1, LOW);
-    digitalWrite(leftMotorDir2, HIGH);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, LOW);
-    digitalWrite(rightMotorDir2, HIGH);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else if (leftSpeed >= 0 && rightSpeed <= 0) {
-    // Turning right
-    int adjLeftSpeed = abs(leftSpeed) * leftMotorCompensation;
-    int adjRightSpeed = abs(rightSpeed) * rightMotorCompensation;
-    
-    digitalWrite(leftMotorDir1, HIGH);
-    digitalWrite(leftMotorDir2, LOW);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, LOW);
-    digitalWrite(rightMotorDir2, HIGH);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else if (leftSpeed <= 0 && rightSpeed >= 0) {
-    // Turning left
-    int adjLeftSpeed = abs(leftSpeed) * leftMotorCompensation;
-    int adjRightSpeed = abs(rightSpeed) * rightMotorCompensation;
-    
-    digitalWrite(leftMotorDir1, LOW);
-    digitalWrite(leftMotorDir2, HIGH);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, HIGH);
-    digitalWrite(rightMotorDir2, LOW);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else {
-    // Fallback - stop
-    stopMotors();
-  }
-  
-  // Check if AutoTune is finished
-  if (xVal != 0) {
-    stopAutoTuneX();
-  }
-  
-  if (yVal != 0) {
-    stopAutoTuneY();
-  }
-}
 
 void BallTracker::calculatePID() {
   if (!ballDetected) {
@@ -350,131 +229,7 @@ void BallTracker::calculatePID() {
   yPID->Compute();
 }
 
-void BallTracker::updateControl() {
-  if (!isActive || !ballDetected) {
-    stopMotors();
-    return;
-  }
-  
-  // If in AutoTune mode, run that instead
-  if (xTuningActive || yTuningActive) {
-    autoTuneLoop();
-    return;
-  }
-  
-  // Calculate PID values
-  calculatePID();
-  
-  // Define dead zones
-  const int xDeadzone = 20;  // Pixels from center
-  const int yDeadzone = 20;  // Pixels from center
-  
-  // Check if we're close enough to target position
-  bool xCentered = abs(xInput) < xDeadzone;
-  bool yCentered = abs(yInput) < yDeadzone;
-  
-  if (xCentered && yCentered) {
-    // Ball is centered, stop motors
-    stopMotors();
-    return;
-  }
-  
-  // Determine motor actions based on PID outputs
-  int leftSpeed = 0;
-  int rightSpeed = 0;
-  
-  // Handle X-axis control (rotation)
-  if (!xCentered) {
-    int turnSpeed = constrain(abs(xOutput), 120, baseSpeed);
-    
-    if (xOutput > 0) {
-      // Need to turn left (ball is to the right of target)
-      leftSpeed -= turnSpeed;
-      rightSpeed += turnSpeed;
-    } else {
-      // Need to turn right (ball is to the left of target)
-      leftSpeed += turnSpeed;
-      rightSpeed -= turnSpeed;
-    }
-  }
-  
-  // Handle Y-axis control (forward/backward)
-  if (!yCentered) {
-    int moveSpeed = constrain(abs(yOutput), 120, baseSpeed);
-    
-    if (yOutput > 0) {
-      // Need to move forward (ball is below target)
-      leftSpeed += moveSpeed;
-      rightSpeed += moveSpeed;
-    } else {
-      // Need to move backward (ball is above target)
-      leftSpeed -= moveSpeed;
-      rightSpeed -= moveSpeed;
-    }
-  }
-  
-  // Apply final motor speeds
-  if (leftSpeed > 0 && rightSpeed > 0) {
-    // Moving forward with possible rotation
-    int adjLeftSpeed = leftSpeed * leftMotorCompensation;
-    int adjRightSpeed = rightSpeed * rightMotorCompensation;
-    
-    // Set motor directions and speeds
-    digitalWrite(leftMotorDir1, HIGH);
-    digitalWrite(leftMotorDir2, LOW);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, HIGH);
-    digitalWrite(rightMotorDir2, LOW);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else if (leftSpeed < 0 && rightSpeed < 0) {
-    // Moving backward with possible rotation
-    int adjLeftSpeed = abs(leftSpeed) * leftMotorCompensation;
-    int adjRightSpeed = abs(rightSpeed) * rightMotorCompensation;
-    
-    // Set motor directions and speeds
-    digitalWrite(leftMotorDir1, LOW);
-    digitalWrite(leftMotorDir2, HIGH);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, LOW);
-    digitalWrite(rightMotorDir2, HIGH);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else if (leftSpeed >= 0 && rightSpeed <= 0) {
-    // Turning right
-    int adjLeftSpeed = abs(leftSpeed) * leftMotorCompensation;
-    int adjRightSpeed = abs(rightSpeed) * rightMotorCompensation;
-    
-    // Set motor directions and speeds
-    digitalWrite(leftMotorDir1, HIGH);
-    digitalWrite(leftMotorDir2, LOW);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed, 120, 255));
-    
-    digitalWrite(rightMotorDir1, LOW);
-    digitalWrite(rightMotorDir2, HIGH);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else if (leftSpeed <= 0 && rightSpeed >= 0) {
-    // Turning left
-    int adjLeftSpeed = abs(leftSpeed) * leftMotorCompensation;
-    int adjRightSpeed = abs(rightSpeed) * rightMotorCompensation;
-    
-    // Set motor directions and speeds
-    digitalWrite(leftMotorDir1, LOW);
-    digitalWrite(leftMotorDir2, HIGH);
-    analogWrite(leftMotorPWM, constrain(adjLeftSpeed,120, 255));
-    
-    digitalWrite(rightMotorDir1, HIGH);
-    digitalWrite(rightMotorDir2, LOW);
-    analogWrite(rightMotorPWM, constrain(adjRightSpeed, 120, 255));
-  } 
-  else {
-    // Fallback - stop
-    stopMotors();
-  }
-}
+
 
 // Movement functions (unchanged)
 void BallTracker::moveForward(int speed) {
@@ -562,4 +317,78 @@ void BallTracker::stopMotors() {
   digitalWrite(rightMotorDir1, LOW);
   digitalWrite(rightMotorDir2, LOW);
   analogWrite(rightMotorPWM, 0);
+}
+
+float BallTracker::getUltrasonicDistance() {
+  // Envoie une impulsion de 10µs sur le trigger
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  // Lit la durée du signal ECHO
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // timeout 30 ms
+
+  // Convertit la durée en distance (cm)
+  float distance_cm = duration * 0.034 / 2;
+
+  // Si aucun écho reçu
+  if (duration == 0) return -1;
+
+  return distance_cm;
+}
+
+void BallTracker::SetError(float er){
+  error = er;
+}
+
+void BallTracker::Set_ball_radius(float R){
+  ballR = R;
+}
+float BallTracker::PID_Compute() {
+    if (error == 2) return 0; // balle non détectée
+
+    integral += error * dt;
+    float derivative = (error - prev_error) / dt;
+    prev_error = error;
+
+    float output = kp * error + ki * integral + kd * derivative;
+    return output;
+}
+
+void BallTracker::setMotorSpeeds(float *vitesse_gauche,float * vitesse_droite) {
+  float commande = PID_Compute();
+     *vitesse_gauche = 110 - commande;
+     *vitesse_droite = 110 + commande;
+
+    // Clamp (optionnel)
+    if (*vitesse_gauche > 255) *vitesse_gauche = 255;
+    if (*vitesse_gauche < 0) *vitesse_gauche = 0;
+
+    if (*vitesse_droite > 255) *vitesse_droite = 255;
+    if (*vitesse_droite < 0) *vitesse_droite = 0;
+}
+
+void BallTracker::updateControl() {
+  if(error == 2){
+    turnRight(100);
+  }
+  if(ballR>60 || getUltrasonicDistance()<10){
+    stopMotors();
+  }
+    float vitesse_gauche ;
+    float vitesse_droite ;
+    setMotorSpeeds(&vitesse_gauche,&vitesse_droite);
+  
+  // Left motor forward
+  digitalWrite(leftMotorDir1, HIGH);
+  digitalWrite(leftMotorDir2, LOW);
+  analogWrite(leftMotorPWM, vitesse_gauche);
+  
+  // Right motor forward
+  digitalWrite(rightMotorDir1, HIGH);
+  digitalWrite(rightMotorDir2, LOW);
+  analogWrite(rightMotorPWM, vitesse_droite);
+  
 }

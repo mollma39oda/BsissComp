@@ -11,11 +11,10 @@ BluetoothControl::BluetoothControl(int leftPWM, int leftD1, int leftD2,
   rightMotorPWM = rightPWM;
   rightMotorDir1 = rightD1;
   rightMotorDir2 = rightD2;
-  
-  // Default values
+
   leftMotorCompensation = 1.0;
-  rightMotorCompensation = 1.0;
-  
+  rightMotorCompensation = 0.82;
+
   // Initialize mode and control variables
   // Initialize mode variable
   mode = 'I'; // 'I' for idle
@@ -23,6 +22,9 @@ BluetoothControl::BluetoothControl(int leftPWM, int leftD1, int leftD2,
   xPosition = 0;
   yPosition = 0;
   velocity = 0;
+  
+  // Initialize timeout tracking
+  lastCommandTime = millis();
   
   isActive = false;
 }
@@ -45,28 +47,49 @@ void BluetoothControl::setMotorCompensation(float left, float right) {
   rightMotorCompensation = right;
 }
 
-void BluetoothControl::processCommand(String command) {
-  // Extract first character for mode if string is not empty
-  if (command.length() > 0) {
-    mode = command.charAt(0);
-    
-    // Check if this is a joystick command (contains commas)
-    int firstComma = command.indexOf(',');
-    if (firstComma > 0) {
-      int secondComma = command.indexOf(',', firstComma + 1);
-      int thirdComma = command.indexOf(',', secondComma + 1);
-      
-      if (firstComma > 0 && secondComma > 0 && thirdComma > 0) {
-        // Parse the X,Y,V values
-        xPosition = command.substring(0, firstComma).toInt();
-        yPosition = command.substring(firstComma + 1, secondComma).toInt();
-        velocity = command.substring(thirdComma + 1).toInt();
-      }
-    }
+// Update the processCommand method to work with const char* instead of String
+void BluetoothControl::processCommand(const char* command) {
+  // Print received command for debugging
+  Serial.print("Received command: ");
+  Serial.println(command);
+  
+  // Check if command is valid
+  if (!command || command[0] == '\0') {
+    Serial.println("Command is empty");
+    return;
   }
+  
+  // Handle mode commands (single character)
+  if (strlen(command) == 1) {
+    mode = command[0];
+    Serial.print("Mode set to: ");
+    Serial.println(mode);
+    return;
+  }
+  
+  // Try to parse as joystick command (should be in X,Y,V format) dir,v
+  char cmdCopy[32]; // Create a copy we can modify
+  strncpy(cmdCopy, command, sizeof(cmdCopy) - 1);
+  cmdCopy[sizeof(cmdCopy) - 1] = '\0'; // Ensure null termination
+  
+  // Parse the values using strtok
+        char* token = strtok(cmdCopy, ",");
+  if (token) {
+    direction = token;
+
+    token = strtok(NULL, ",");
+    if (token) {
+      velocity = atoi(token);
+
+      Serial.print("Direction : ");
+      Serial.print(direction);
+      Serial.print(" | Vitesse : ");
+      Serial.println(velocity);
+    } else {
+      Serial.println("Valeur manquante après la virgule.");
+    }
+  } 
 }
-
-
 
 void BluetoothControl::updateControl() {
   if (!isActive) {
@@ -74,16 +97,33 @@ void BluetoothControl::updateControl() {
     return;
   }
   
-  // Determine action based on joystick position
-  // Dead zone in the middle (-10 to 10)
-  if (xPosition == 170 && yPosition == 140) {
+  // Check for timeout - reset values if no changes in COMMAND_TIMEOUT ms
+ /* if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
+    // Timeout occurred, reset values
+    if (xPosition != 0 || yPosition != 0 || velocity != 0) {
+      Serial.println("Command timeout - resetting values to 0,0,0");
+      xPosition = 0;
+      yPosition = 0;
+      velocity = 0;
+      stopMotors();
+    }
+  }*/
+  
+  // Add debug output to verify values being received
+  Serial.print("Joystick: X=");
+  Serial.print(direction);
+  Serial.print(", V=");
+  Serial.println(velocity);
+  
+  // Rest of your original updateControl code
+ /* if (xPosition == 170 && yPosition == 140 || xPosition == 0 && yPosition == 0 || xPosition == 255 && yPosition == 255) {
     stopMotors(); // Joystick in center position
-  } 
-  else if (210 > xPosition && xPosition> 130) {
+  }  
+  if (210 > xPosition && xPosition > 130) {
     // Mainly forward/backward movement
-    if (yPosition > 180) {
+    if (yPosition < 100) {
       moveForward(velocity);
-    } else if (yPosition < 100) {
+    } else if (yPosition > 180) {
       moveBackward(velocity);
     }
   } 
@@ -94,31 +134,23 @@ void BluetoothControl::updateControl() {
     } else if (xPosition < 130) {
       turnLeft(velocity);
     }
-  } 
+  } else {
+    stopMotors();
+  } */
+  if(direction == "FW"){
+     moveForward(velocity);
+  }
+  else if(direction ==  "BW"){
+         moveBackward(velocity);
+  }
+  else if(direction ==  "LF"){
+      turnLeft(velocity);
+  }
+  else if(direction == "RG"){
+    turnRight(velocity);
+  }
   else {
-    // Combined movement (differential steering)
-    int leftSpeed, rightSpeed;
-    
-    if (yPosition > 0) {
-      // Moving forward with turning
-      if (xPosition > 0) {
-        // Forward right
-        turnRight(velocity);
-      } else {
-        // Forward left
-        turnLeft(velocity);
-      }
-      
-    } else {
-      // Moving backward with turning
-      if (xPosition > 0) {
-        // Backward right
-        turnRight(velocity);
-      } else {
-        // Backward left
-        turnLeft(velocity);
-      }
-    }
+     stopMotors();
   }
 }
 
@@ -127,8 +159,8 @@ void BluetoothControl::moveForward(int speed) {
   int rightSpeed = speed * rightMotorCompensation;
   
   // Ensure speeds are within bounds
-  leftSpeed = constrain(leftSpeed, 180, 255);
-  rightSpeed = constrain(rightSpeed, 180, 255);
+  leftSpeed = constrain(leftSpeed, 0, 170);
+  rightSpeed = constrain(rightSpeed, 0, 170);
   
   // Left motor forward
   digitalWrite(leftMotorDir1, HIGH);
@@ -146,8 +178,8 @@ void BluetoothControl::moveBackward(int speed) {
   int rightSpeed = speed * rightMotorCompensation;
   
   // Ensure speeds are within bounds
-  leftSpeed = constrain(leftSpeed, 180, 255);
-  rightSpeed = constrain(rightSpeed,180, 255);
+  leftSpeed = constrain(leftSpeed, 0, 170);
+  rightSpeed = constrain(rightSpeed, 0, 170);
   
   // Left motor backward
   digitalWrite(leftMotorDir1, LOW);
@@ -165,17 +197,17 @@ void BluetoothControl::turnLeft(int speed) {
   int rightSpeed = speed * rightMotorCompensation;
   
   // Ensure speeds are within bounds
-  leftSpeed = constrain(leftSpeed, 180, 255);
-  rightSpeed = constrain(rightSpeed, 180, 255);
+  leftSpeed = constrain(leftSpeed, 0, 170);
+  rightSpeed = constrain(rightSpeed, 0, 170);
   
   // Left motor backward
-  digitalWrite(leftMotorDir1, LOW);
-  digitalWrite(leftMotorDir2, HIGH);
+  digitalWrite(leftMotorDir1, HIGH);
+  digitalWrite(leftMotorDir2, LOW);
   analogWrite(leftMotorPWM, leftSpeed);
   
   // Right motor forward
-  digitalWrite(rightMotorDir1, HIGH);
-  digitalWrite(rightMotorDir2, LOW);
+  digitalWrite(rightMotorDir1, LOW);
+  digitalWrite(rightMotorDir2, HIGH);
   analogWrite(rightMotorPWM, rightSpeed);
 }
 
@@ -184,17 +216,17 @@ void BluetoothControl::turnRight(int speed) {
   int rightSpeed = speed * rightMotorCompensation;
   
   // Ensure speeds are within bounds
-  leftSpeed = constrain(leftSpeed, 180, 255);
-  rightSpeed = constrain(rightSpeed, 180, 255);
+  leftSpeed = constrain(leftSpeed, 0, 170);
+  rightSpeed = constrain(rightSpeed, 0, 170);
   
   // Left motor forward
-  digitalWrite(leftMotorDir1, HIGH);
-  digitalWrite(leftMotorDir2, LOW);
+  digitalWrite(leftMotorDir1, LOW);
+  digitalWrite(leftMotorDir2, HIGH);
   analogWrite(leftMotorPWM, leftSpeed);
   
   // Right motor backward
-  digitalWrite(rightMotorDir1, LOW);
-  digitalWrite(rightMotorDir2, HIGH);
+  digitalWrite(rightMotorDir1, HIGH);
+  digitalWrite(rightMotorDir2, LOW);
   analogWrite(rightMotorPWM, rightSpeed);
 }
 

@@ -1,4 +1,4 @@
-// Optimized main.ino
+// Optimized main.ino - Adapted for robust line loss handling
 #include "LineFollower.h"
 #include "BluetoothControl.h"
 #include "BallTracker.h"
@@ -12,24 +12,30 @@ const byte LEFT_MOTOR_DIR2 = 7;
 const byte RIGHT_MOTOR_PWM = 10;
 const byte RIGHT_MOTOR_DIR1 = 12;
 const byte RIGHT_MOTOR_DIR2 = 13;
-const byte LEFT_IR_PIN = 5;
-const byte RIGHT_IR_PIN = 6;
-const byte TRIG_PIN = A4;
-const byte ECHO_PIN = A5;
+
+// Updated IR sensor pins (from right to left: 6, A1, A0, 11, 5)
+const byte FAR_RIGHT_IR_PIN = 6;
+const byte RIGHT_IR_PIN = 11;
+const byte CENTER_IR_PIN = 4;
+const byte LEFT_IR_PIN = A1;
+const byte FAR_LEFT_IR_PIN = 5;
+
+const byte TRIG_PIN = A5;
+const byte ECHO_PIN = A4;
 // Button setup - add these at the global variable section
 const byte Button = 2;  // Button pin
 bool that = false;      // Toggle state
 bool lastButtonState = LOW;
 unsigned long lastDebounceTime = 0;
 const unsigned long debounceDelay = 50;  // Debounce time in milliseconds
+
 // CENTRALIZED CONFIGURATION - easy to modify in one place
 // Motor configuration
 const float RIGHT_MOTOR_COMPENSATION = 1.2;
 const float LEFT_MOTOR_COMPENSATION = 1.0;
-const byte MIN_MOTOR_SPEED = 190; // Higher minimum speed to avoid stalling
+const byte MIN_MOTOR_SPEED = 150; // Higher minimum speed to avoid stalling
 const byte MAX_MOTOR_SPEED = 255;
-const byte BASE_SPEED = 210;
-
+const byte BASE_SPEED = 220;
 // PID configuration
 const double LINE_KP = 50.0;
 const double LINE_KI = 0.01;
@@ -66,7 +72,7 @@ char inputBuffer[32]; // Fixed size buffer instead of String
 byte bufferPos = 0;
 bool messageComplete = false;
 unsigned long lastCommunicationTime = 0;
-byte servoAngle = 90;
+byte servoAngle = 80;
 byte lastSentServoAngle = 255; // Initialize different to trigger first send
 unsigned long lastServoUpdateTime = 0;
 
@@ -74,8 +80,8 @@ unsigned long lastServoUpdateTime = 0;
 byte tJunctionCount = 0;
 unsigned long lastTJunctionTime = 0;
 
-// Create instances of modules
-LineFollower lineFollower(LEFT_IR_PIN, RIGHT_IR_PIN, 
+// Create instances of modules - updated constructor call for LineFollower
+LineFollower lineFollower(FAR_LEFT_IR_PIN, LEFT_IR_PIN, CENTER_IR_PIN, RIGHT_IR_PIN, FAR_RIGHT_IR_PIN, 
                          LEFT_MOTOR_PWM, LEFT_MOTOR_DIR1, LEFT_MOTOR_DIR2, 
                          RIGHT_MOTOR_PWM, RIGHT_MOTOR_DIR1, RIGHT_MOTOR_DIR2,
                          TRIG_PIN, ECHO_PIN);
@@ -102,7 +108,6 @@ void setup() {
   
   // Set PID parameters and sample times for line follower
   lineFollower.setPID(LINE_KP, LINE_KI, LINE_KD);
-  lineFollower.setSampleTime(PID_SAMPLE_TIME);
   lineFollower.setBaseSpeed(BASE_SPEED);
     
   // Set PID parameters and sample times for ball tracker
@@ -120,6 +125,12 @@ void setup() {
     FORWARD_AFTER_OBSTACLE_TIME
   );
   
+  // Initialize all IR sensor pins
+  pinMode(FAR_LEFT_IR_PIN, INPUT);
+  pinMode(LEFT_IR_PIN, INPUT);
+  pinMode(CENTER_IR_PIN, INPUT);
+  pinMode(RIGHT_IR_PIN, INPUT);
+  pinMode(FAR_RIGHT_IR_PIN, INPUT);
   pinMode(Button, INPUT);
 
   // Set target position for ball tracker (center of frame)
@@ -166,23 +177,20 @@ void loop() {
   // Handle each mode's operation
   switch (currentMode) {
     case MODE_LINE_FOLLOWER:
-    if( that == true ){
+    if(that == true ){
       handleLineFollowerMode();
-      
-      }
+    }
     if(that == false){
         stopMotors();
-        
-      }
+    }
       break;
     case MODE_BLUETOOTH_CONTROL:
       handleBluetoothControlMode();
       break;
-      
     case MODE_BALL_TRACKER:
       handleBallTrackerMode();
       break;
-      
+    case MODE_IDLE:
     default:
       stopMotors();
       break;
@@ -200,7 +208,6 @@ void stopMotors() {
 }
 
 void checkESPCommunication() {
-  // Read data from ESP32-CAM more efficiently
   while (Serial.available()) {
     char c = Serial.read();
     
@@ -209,6 +216,10 @@ void checkESPCommunication() {
       inputBuffer[bufferPos] = '\0'; // Null terminate
       messageComplete = true;
       bufferPos = 0;
+      
+      // Debug: Print the complete message
+      Serial.print("Received message: ");
+      Serial.println(inputBuffer);
       break;
     } else {
       // Add to buffer
@@ -226,7 +237,7 @@ void checkESPCommunication() {
   if (millis() - lastServoUpdateTime > COMM_INTERVAL) {
     if (servoAngle != lastSentServoAngle) {
       // Use compact format: 'S' + angle as digits
-      Serial.write('S');
+      Serial.print("S:");
       Serial.println(servoAngle);
       lastSentServoAngle = servoAngle;
     }
@@ -236,12 +247,23 @@ void checkESPCommunication() {
 
 void processESPMessage(const char* message) {
   // Message format optimization
+  // Debug: Print the message being processed
+  Serial.print("Processing message: ");
+  Serial.println(message);
+   
+  // Message format optimization
   if (message[0] == 0) return; // Empty message
   
   // Handle different message types based on first character
   switch (message[0]) {
     case 'B': // WiFi command (previously Bluetooth)
+      // Pass only the command part (skip 'B')
       processWiFiCommand(message + 1);
+      break;
+      
+    case 'J': // Special case for joystick data (if formatted as "Jx,y,v")
+      // Pass joystick data to Bluetooth control (skip 'J')
+      btControl.processCommand(message + 1);
       break;
       
     case 'X': // Ball position update - format: "Xnnn,nnn"
@@ -251,33 +273,59 @@ void processESPMessage(const char* message) {
           int x = atoi(message + 1);  // Skip the 'X'
           int y = atoi(pos + 1);     // Skip the comma
           ballTracker.updateBallPosition(x, y);
+          ballTracker.SetError(x);
+          ballTracker.Set_ball_radius(y);
         }
+      }
+      break;
+      
+    default:
+      // If message contains commas, it might be direct joystick data
+      if (strchr(message, ',')) {
+        btControl.processCommand(message);
       }
       break;
   }
 }
 
 void processWiFiCommand(const char* command) {
-  // Pass command to Bluetooth control
-  btControl.processCommand(command);
+  // Debug the incoming command
+  Serial.print("WiFi command received: ");
+  Serial.println(command);
   
-  // Check for mode changes based on command
-  char mode = btControl.getMode();
+  // Look for joystick data format (contains commas)
+  if (strchr(command, ',')) {
+    // This is likely joystick data, pass it to Bluetooth control
+    btControl.processCommand(command);
+    return;
+  }
   
-  switch (mode) {
-    case 'S':
-     switchMode(MODE_IDLE);
-    case 'A': // 'A' -> line follower
-      switchMode(MODE_LINE_FOLLOWER);
-      break;
-      
-    case 'M': // 'M' -> WiFi/Bluetooth control
-      switchMode(MODE_BLUETOOTH_CONTROL);
-      break;
-      
-    case 'B': // 'A' -> ball tracker
-      switchMode(MODE_BALL_TRACKER);
-      break;
+  // Handle mode commands
+  if (command[0] != '\0') {
+    OperatingMode mode;
+    
+    switch (command[0]) {
+      case 'S':
+        mode = MODE_IDLE;
+        break;
+      case 'A':
+        mode = MODE_LINE_FOLLOWER;
+        break;
+      case 'M':
+        mode = MODE_BLUETOOTH_CONTROL;
+        break;
+      case 'B':
+        mode = MODE_BALL_TRACKER;
+        break;
+      default:
+        return; // Invalid command
+    }
+    
+    // Process the mode command in Bluetooth control as well
+    btControl.processCommand(command);
+    
+    // Switch the robot's operating mode
+    switchMode(mode);
   }
 }
 
@@ -317,12 +365,16 @@ void switchMode(OperatingMode newMode) {
 }
 
 void handleLineFollowerMode() {
-  // Update line follower and check for T-junctions
+  // Update line follower and check for T-junctions or crossroads
+  bool farLeftSensor = digitalRead(FAR_LEFT_IR_PIN);
   bool leftSensor = digitalRead(LEFT_IR_PIN);
+  bool centerSensor = digitalRead(CENTER_IR_PIN);
   bool rightSensor = digitalRead(RIGHT_IR_PIN);
+  bool farRightSensor = digitalRead(FAR_RIGHT_IR_PIN);
   
-  // Detect T-junction (both sensors off the line)
-  if (leftSensor == LOW && rightSensor == LOW) {
+  // Detect T-junction or crossroad (3+ sensors detect line)
+  int activeSensors = (!farLeftSensor) + (!leftSensor) + (!centerSensor) + (!rightSensor) + (!farRightSensor);
+  if (activeSensors >= 3) {
     // Only count if enough time has passed since last junction
     if (millis() - lastTJunctionTime > 1000) {
       tJunctionCount++;
@@ -331,13 +383,11 @@ void handleLineFollowerMode() {
   }
   
   // Update line follower
-  servoAngle = lineFollower.update(servoAngle);
+  servoAngle = lineFollower.update(servoAngle); // Robust line loss handling is now in LineFollower.cpp
 }
 
 void handleBluetoothControlMode() {
-  if (btControl.isControlActive()) {
-    btControl.updateControl();
-  }
+  btControl.updateControl();
 }
 
 void handleBallTrackerMode() {

@@ -1,4 +1,3 @@
-
 #ifndef BLUETOOTH_CONTROL_H
 #define BLUETOOTH_CONTROL_H
 
@@ -23,9 +22,13 @@ class BluetoothControl {
     int xPosition;
     int yPosition;
     int velocity;
-    
+    String direction;
     // Control state
     bool isActive;
+    
+    // Timeout tracking variables
+    unsigned long lastCommandTime;
+    const unsigned long COMMAND_TIMEOUT = 500; // 500ms timeout
     
   public:
     // Constructor
@@ -39,7 +42,8 @@ class BluetoothControl {
     void setMotorCompensation(float left, float right);
     
     // Process command from Bluetooth
-    void processCommand(String command);
+    void processCommand(const char* command);
+
     
     // Update control based on joystick values
     void updateControl();
@@ -51,7 +55,6 @@ class BluetoothControl {
     void turnRight(int speed);
     void stopMotors();
     
-    // Get functions
     // Get functions
     char getMode() { return mode; }
     int getXPosition() { return xPosition; }
